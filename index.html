@@ -128,7 +128,6 @@ video { width: 100%; height: 100%; object-fit: contain; }
 .p-bar-w { width: 240px; height: 6px; background: var(--surface3); border-radius: 3px; overflow: hidden; }
 .p-bar-f { width: 0%; height: 100%; background: var(--accent); }
 
-/* MEDIA QUERIES PARA RESPONSIVIDADE GLOBAL (MÓVEL) */
 @media(max-width: 768px){
   header { padding: 10px 16px; flex-direction: column; gap: 12px; align-items: stretch; }
   .logo { justify-content: center; }
@@ -204,7 +203,7 @@ video { width: 100%; height: 100%; object-fit: contain; }
       <div class="tab-m on" id="tm-url" onclick="setImpTab('url')"><i class="fa-solid fa-globe"></i> Link URL</div>
       <div class="tab-m" id="tm-raw" onclick="setImpTab('raw')"><i class="fa-solid fa-code"></i> Texto Puro</div>
     </div>
-    <div id="box-imp-url"><input type="url" id="m3u-url" placeholder="http://sualista.com/get.php?auth=user..." value="https://raw.githubusercontent.com/Ramys/Iptv-Brasil-2026/refs/heads/master/CanaisBR06.m3u8"></div>
+    <div id="box-imp-url"><input type="url" id="m3u-url" placeholder="http://sualista.com/get.php?auth=user..."></div>
     <div id="box-imp-raw" style="display:none"><textarea id="m3u-ta" placeholder="#EXTM3U..." style="height:120px; font-family: monospace; resize:none;"></textarea></div>
     <div class="mfoot">
       <button class="btn sm" onclick="closeM()"><i class="fa-solid fa-xmark"></i> Cancelar</button>
@@ -221,17 +220,16 @@ video { width: 100%; height: 100%; object-fit: contain; }
 </div>
 
 <script>
-const DB = { live:[], filmes:[], series:[] };
-let FIL = { live:[], filmes:[], series:[] };
+const DB = { live:[], filmes:[], series:[], uniqueSeriesTitles:[], seriesGroups:[] };
+let FIL = { live:[], filmes:[], seriesTitles:[] };
 let TAB = 'live';
 let CUR_ITEM = null;
 let HLS_INSTANCE = null;
 let TS_INSTANCE = null;
 let IMPORT_MODE = 'url';
 
-// VARIÁVEIS DE PAGINAÇÃO (CONVERTE PARA INFINITE SCROLL)
 const ITEMS_PER_PAGE = 60;
-const PAGINATION_STATE = { live: 0, filmes: 0, series: 0 };
+const PAGINATION_STATE = { live: 1, filmes: 1, series: 1 };
 let DEBOUNCE_TIMER = null;
 
 function setImpTab(t) {
@@ -332,14 +330,24 @@ function sortingMachine(arr) {
     }
   });
 
-  DB.live = live; DB.filmes = filmes; DB.series = series;
-  updateBadges(); goTab('live'); showLoader(false);
+  DB.live = live; 
+  DB.filmes = filmes; 
+  DB.series = series;
+  
+  showLoader(true, 'Otimizando catálogo de séries...');
+  setTimeout(() => {
+    DB.uniqueSeriesTitles = [...new Set(series.map(s => s.serieTitle))].sort();
+    DB.seriesGroups = [...new Set(series.map(s => s.group).filter(Boolean))].sort();
+    updateBadges(); 
+    goTab('live'); 
+    showLoader(false);
+  }, 50);
 }
 
 function updateBadges() {
   el('b-live').textContent = DB.live.length;
   el('b-filmes').textContent = DB.filmes.length;
-  el('b-series').textContent = [...new Set(DB.series.map(s=>s.serieTitle))].length;
+  el('b-series').textContent = DB.uniqueSeriesTitles.length;
 }
 
 function goTab(t) {
@@ -348,54 +356,62 @@ function goTab(t) {
     el('tab-'+x).classList.toggle('on', x===t);
     el('sec-'+x).classList.toggle('active', x===t);
   });
-  buildSelects(); triggerSearch();
+  buildSelects(); 
+  triggerSearch();
 }
 
 function buildSelects() {
-  const current = TAB==='live'? DB.live : (TAB==='filmes'? DB.filmes : DB.series);
-  const key = TAB==='series'? 'serieTitle' : 'group';
-  const vals = [...new Set(current.map(i=>i[key]).filter(Boolean))].sort();
   const s = el('main-filter');
-  s.innerHTML = `<option value="">Todos os grupos (${current.length})</option>`;
-  vals.forEach(v => { s.innerHTML += `<option value="${x(v)}">${x(v)}</option>`; });
+  s.innerHTML = '';
+  
+  if (TAB === 'series') {
+    s.innerHTML = `<option value="">Todos os grupos de Séries (${DB.seriesGroups.length})</option>`;
+    DB.seriesGroups.forEach(v => { s.innerHTML += `<option value="${x(v)}">${x(v)}</option>`; });
+  } else {
+    const current = TAB==='live'? DB.live : DB.filmes;
+    const vals = [...new Set(current.map(i=>i.group).filter(Boolean))].sort();
+    s.innerHTML = `<option value="">Todos os grupos (${current.length})</option>`;
+    vals.forEach(v => { s.innerHTML += `<option value="${x(v)}">${x(v)}</option>`; });
+  }
 }
 
-// EVITA FILTRAR REPETIDAMENTE ENQUANTO O USUÁRIO DIGITA
 function debounceSearch() {
   clearTimeout(DEBOUNCE_TIMER);
-  DEBOUNCE_TIMER = setTimeout(() => {
-    triggerSearch();
-  }, 250);
+  DEBOUNCE_TIMER = setTimeout(() => { triggerSearch(); }, 250);
 }
 
 function triggerSearch() {
   const q = el('main-search').value.toLowerCase();
   const g = el('main-filter').value;
-  const target = TAB==='live'? DB.live : (TAB==='filmes'? DB.filmes : DB.series);
 
-  FIL[TAB] = target.filter(i => {
-    const matchesQ = !q || (TAB==='series'? i.serieTitle.toLowerCase().includes(q) : i.name.toLowerCase().includes(q));
-    const matchesG = !g || (TAB==='series'? i.serieTitle === g : i.group === g);
-    return matchesQ && matchesG;
-  });
-
-  // Reseta paginação ao pesquisar ou trocar filtros
   PAGINATION_STATE[TAB] = 1;
 
-  if(TAB==='live') renderLive(false);
-  if(TAB==='filmes') renderFilmes(false);
-  if(TAB==='series') renderSeries(false);
+  if (TAB === 'series') {
+    let baseTitles = DB.uniqueSeriesTitles;
+    
+    if (g) {
+      const titlesInGroup = new Set(DB.series.filter(s => s.group === g).map(s => s.serieTitle));
+      baseTitles = baseTitles.filter(t => titlesInGroup.has(t));
+    }
+
+    FIL.seriesTitles = baseTitles.filter(title => !q || title.toLowerCase().includes(q));
+    renderSeries(false);
+  } else {
+    const target = TAB==='live'? DB.live : DB.filmes;
+    FIL[TAB] = target.filter(i => {
+      const matchesQ = !q || i.name.toLowerCase().includes(q);
+      const matchesG = !g || i.group === g;
+      return matchesQ && matchesG;
+    });
+    if(TAB==='live') renderLive(false);
+    if(TAB==='filmes') renderFilmes(false);
+  }
 }
 
-// RENDERIZADORES COM CONCEITO DE PAGINAÇÃO (APPEND)
 function renderLive(append = false) {
   const targetElement = el('lst-live');
   if (!append) targetElement.innerHTML = '';
-  
-  if (FIL.live.length === 0) {
-    targetElement.innerHTML = `<div class="empty"><i class="fa-solid fa-folder-open"></i>Nenhum canal localizado.</div>`;
-    return;
-  }
+  if (FIL.live.length === 0) { targetElement.innerHTML = `<div class="empty"><i class="fa-solid fa-folder-open"></i>Nenhum canal localizado.</div>`; return; }
 
   const start = (PAGINATION_STATE.live - 1) * ITEMS_PER_PAGE;
   const end = start + ITEMS_PER_PAGE;
@@ -409,18 +425,13 @@ function renderLive(append = false) {
       <div class="ri"><div class="rn">${x(c.name)}</div><div class="rm"><span class="tag t-ts">${c.streamType.toUpperCase()}</span>${x(c.group)}</div></div>
     </div>`;
   }).join('');
-
   targetElement.insertAdjacentHTML('beforeend', html);
 }
 
 function renderFilmes(append = false) {
   const targetElement = el('lst-filmes');
   if (!append) targetElement.innerHTML = '';
-
-  if (FIL.filmes.length === 0) {
-    targetElement.innerHTML = `<div class="empty"><i class="fa-solid fa-folder-open"></i>Nenhum filme localizado.</div>`;
-    return;
-  }
+  if (FIL.filmes.length === 0) { targetElement.innerHTML = `<div class="empty"><i class="fa-solid fa-folder-open"></i>Nenhum filme localizado.</div>`; return; }
 
   const start = (PAGINATION_STATE.filmes - 1) * ITEMS_PER_PAGE;
   const end = start + ITEMS_PER_PAGE;
@@ -434,24 +445,17 @@ function renderFilmes(append = false) {
       <div class="cl"><div class="ct">${x(c.name)}</div></div>
     </div>`;
   }).join('');
-
   targetElement.insertAdjacentHTML('beforeend', html);
 }
 
 function renderSeries(append = false) {
   const targetElement = el('lst-series-titles');
   if (!append) targetElement.innerHTML = '';
-
-  const uniqueTitles = [...new Set(FIL.series.map(s => s.serieTitle))].sort();
-
-  if (uniqueTitles.length === 0) {
-    targetElement.innerHTML = `<div class="empty"><i class="fa-solid fa-folder-open"></i>Nenhuma série localizada.</div>`;
-    return;
-  }
+  if (FIL.seriesTitles.length === 0) { targetElement.innerHTML = `<div class="empty"><i class="fa-solid fa-folder-open"></i>Nenhuma série localizada.</div>`; return; }
 
   const start = (PAGINATION_STATE.series - 1) * ITEMS_PER_PAGE;
   const end = start + ITEMS_PER_PAGE;
-  const slice = uniqueTitles.slice(start, end);
+  const slice = FIL.seriesTitles.slice(start, end);
 
   const html = slice.map(t => {
     const sample = DB.series.find(s => s.serieTitle === t);
@@ -460,14 +464,12 @@ function renderSeries(append = false) {
       <div class="cl"><div class="ct">${x(t)}</div></div>
     </div>`;
   }).join('');
-
   targetElement.insertAdjacentHTML('beforeend', html);
 }
 
-// ESCUTA O SCROLL DA PÁGINA PARA ENTRAR COM MAIS ITENS SE CHEGAR NO FIM
 window.addEventListener('scroll', () => {
   if ((window.innerHeight + window.scrollY) >= document.documentElement.scrollHeight - 150) {
-    const currentListLength = TAB === 'live' ? FIL.live.length : (TAB === 'filmes' ? FIL.filmes.length : [...new Set(FIL.series.map(s => s.serieTitle))].length);
+    const currentListLength = TAB === 'live' ? FIL.live.length : (TAB === 'filmes' ? FIL.filmes.length : FIL.seriesTitles.length);
     const maxLoaded = PAGINATION_STATE[TAB] * ITEMS_PER_PAGE;
 
     if (currentListLength > maxLoaded) {
@@ -502,6 +504,12 @@ function playMedia(category, index, optTitle = '') {
   if (!item) return;
   CUR_ITEM = item;
 
+  // LÓGICA DO SEU PROXY CORRIGIDA PARA CONTEÚDO MISTO (HTTP EM PÁGINA HTTPS)
+  let videoUrl = item.url;
+  if (window.location.protocol === 'https:' && videoUrl.startsWith('http://')) {
+    videoUrl = 'https://proxy.nellure.com/?url=' + encodeURIComponent(videoUrl);
+  }
+
   el('player-light').classList.add('active');
   document.body.style.overflow = 'hidden';
 
@@ -515,7 +523,7 @@ function playMedia(category, index, optTitle = '') {
   
   if (item.streamType === 'hls' && Hls.isSupported()) {
     HLS_INSTANCE = new Hls({ enableWorker: true, lowLatencyMode: true });
-    HLS_INSTANCE.loadSource(item.url);
+    HLS_INSTANCE.loadSource(videoUrl); // Passando a URL via Proxy
     HLS_INSTANCE.attachMedia(vid);
     HLS_INSTANCE.on(Hls.Events.MANIFEST_PARSED, () => { 
       vid.play().catch(()=>{}); 
@@ -524,7 +532,7 @@ function playMedia(category, index, optTitle = '') {
     });
     HLS_INSTANCE.on(Hls.Events.ERROR, (_, d) => { if(d.fatal) setOv('err'); });
   } else if (item.streamType === 'ts' && mpegts.isSupported()) {
-    TS_INSTANCE = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: item.url });
+    TS_INSTANCE = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: videoUrl }); // Passando a URL via Proxy
     TS_INSTANCE.attachMediaElement(vid);
     TS_INSTANCE.load();
     TS_INSTANCE.play().then(() => {
@@ -532,7 +540,7 @@ function playMedia(category, index, optTitle = '') {
       handleMobileOrientation(true);
     }).catch(() => setOv('off'));
   } else {
-    vid.src = item.url;
+    vid.src = videoUrl; // Passando a URL via Proxy
     vid.load();
     vid.play().then(() => {
       setOv('off');
@@ -651,10 +659,10 @@ function setOv(st) {
   const o = el('vov'); o.className = 'vov';
   if(st==='off') o.classList.add('off');
   if(st==='load') o.innerHTML = `<div class="spin"></div><div style="font-size:12px;color:var(--muted)">Carregando stream, aguarde...</div>`;
-  if(st==='err') o.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color:var(--danger); font-size: 26px;"></i><div style="color:var(--danger); font-size:14px; font-weight:700; margin-top: 5px;">Transmissão Off-line</div><div style="font-size:11px;color:var(--muted)">Verifique com seu provedor.</div>`;
+  if(st==='err') o.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color:var(--danger); font-size: 26px;"></i><div style="color:var(--danger); font-size:14px; font-weight:700; margin-top: 5px;">Transmissão Off-line</div><div style="font-size:11px;color:var(--muted)">Verifique com seu provedor ou as diretrizes do proxy.</div>`;
 }
 function showLoader(s, txt='') { el('loading-screen').className = s?'on':''; if(txt) el('load-status').textContent = txt; }
-function copyUrl() { if(CUR_ITEM) { navigator.clipboard.writeText(CUR_ITEM.url); toast('<i class="fa-solid fa-circle-check" style="color:var(--success)"></i> Link copiado com sucesso!'); } }
+function copyUrl() { if(CUR_ITEM) { navigator.clipboard.writeText(CUR_ITEM.url); toast('<i class="fa-solid fa-circle-check" style="color:var(--success)"></i> Link copiado!'); } }
 function proxyImg(u) { return u ? 'https://wsrv.nl/?url='+encodeURIComponent(u)+'&w=120&h=180&fit=cover&output=webp' : ''; }
 function limg(c) { return c.logo ? `<img class="logo-img" src="${proxyImg(c.logo)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="logo-ph" style="display:none">${abbr(c.name)}</div>` : `<div class="logo-ph">${abbr(c.name)}</div>`; }
 function poster(c) { return c && c.logo ? `<img class="poster" src="${proxyImg(c.logo)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="poster-ph" style="display:none"><i class="fa-solid fa-clapperboard"></i></div>` : `<div class="poster-ph"><i class="fa-solid fa-clapperboard"></i></div>`; }
@@ -663,5 +671,6 @@ function x(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replac
 function el(id) { return document.getElementById(id); }
 function toast(m) { const t = el('toast'); t.innerHTML = m; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(()=>t.classList.remove('show'), 3000); }
 </script>
+
 </body>
 </html>
